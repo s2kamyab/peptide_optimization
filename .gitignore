@@ -1,0 +1,83 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments
+.venv/
+venv/
+env/
+ENV/
+peptide_opt_venv/
+py27venv/
+py310venv/
+zalva_venv/
+colabfold310/
+
+# Editor, OS, and notebook state
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+
+# Local caches
+.cache/
+cif_cache/
+tools/localcolabfold/
+
+# Experiment tracking and monitoring outputs
+wandb/
+wandb_monitoring/
+flow_gru_vae_monitoring/
+
+# Generated optimization / training outputs
+bo_results/
+lolbo_results/
+output/
+outputs/
+outputs_metal_site/
+pareto_front/
+peptide_vae_out/
+figs_bo_comparison/
+
+# Structure-prediction and Aggrescan3D outputs
+*_metaldb_a3ds/
+*_metaldb_pdbs/
+colabfold_output/
+
+# Model checkpoints and binary arrays
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.npy
+*.npz
+
+# Large generated datasets and raw MetalPDB exports
+Data/
+metalpdb_*.csv
+metalpdb_*.json
+metalpdb_*_raw.json
+metal_binding_augmented_random_peptides_*.csv
+metal_binding_dataset_from_*.csv
+
+# Generated reports, plots, and rankings at repository root
+hypervolume_vs_iterations.csv
+hypervolume_vs_iterations.png
+seqvae_architecture.png
+seqvae_computation_graph.png
+ranked_peptides_inverse_mn.csv
+option2_top50_surrogate_proposals.csv
+
+# Keep tiny hand-authored examples and requirements trackable
+!metal_binding_dataset_example.csv
+!metal_binding_requirements.txt

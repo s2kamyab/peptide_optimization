@@ -1,0 +1,506 @@
+# compare_so_vs_mobo_plots_and_table.py
+# Generates:
+# 1) Pareto projections (2D objective pair scatters)
+# 2) Hypervolume vs iterations (shared ref point)
+# 3) Best scalar score vs iterations (SO + MO for comparability)
+# 4) Representative peptide table (best scalar + Pareto reps) INCLUDING closest training row if provided
+#
+# pip install numpy pandas matplotlib torch botorch gpytorch
+
+from __future__ import annotations
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import torch
+from botorch.utils.multi_objective.hypervolume import Hypervolume
+from loBO_peptide_optimization_MN import find_closest_peptide_rows  # utility to find closest peptides in training set (for representative table)
+# -----------------------------
+# INPUTS (uploaded outputs)
+# -----------------------------
+SO_LOG_PATH = "peptide_vae_out/bo_optimized_peptides_MN.csv"
+MO_LOG_PATH = "peptide_vae_out/bo_optimized_peptides_mo_MN.csv"
+
+SO_CLOSEST_PATH = "peptide_vae_out/bo_top10_closest_rows_MN.csv"
+MO_CLOSEST_PATH = "peptide_vae_out/bo_top10_closest_rows_mo_MN.csv"
+# Your training CSV (used to build the fixed reference batch, same as your BO code)
+TRAIN_CSV_PATH = "metalpdb_binding_windows_len10_MN.csv"  # set absolute path if needed
+TRAIN_SEQ_COL = "peptide_len10"
+
+# Output folder
+OUT_DIR = "figs_bo_comparison"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+# -----------------------------
+# Objective columns (maximization)
+# -----------------------------
+OBJ_SUB_COLS = ["chelation_sub", "solubility_sub", "stability_sub", "expression_sub"]
+OBJ_COLS = ["obj_chelation", "obj_solubility", "obj_stability", "obj_expression"]
+
+# Same weights as your single-objective blackbox
+SCALAR_WEIGHTS = np.array([0.50, 0.30, 0.10, 0.10], dtype=float)
+
+# -----------------------------
+# 1) IMPORTANT: import your stable objectives evaluator
+# -----------------------------
+# Recommended:
+from black_box_fcn_mo_MN import compute_objectives_mn
+
+# def compute_objectives_mn(*args, **kwargs):
+#     raise NotImplementedError(
+#         "Import or paste your compute_objectives_mn(...) here.\n"
+#         "Example:\n"
+#         "  from black_box_fcn_mo_MN import compute_objectives_mn"
+#     )
+
+# -----------------------------
+# 2) Utility: non-dominated set (maximization)
+# -----------------------------
+def is_non_dominated_max(Y: np.ndarray) -> np.ndarray:
+    """O(N^2) non-dominated mask for maximization."""
+    N = Y.shape[0]
+    nd = np.ones(N, dtype=bool)
+    for i in range(N):
+        if not nd[i]:
+            continue
+        for j in range(N):
+            if i == j:
+                continue
+            if np.all(Y[j] >= Y[i]) and np.any(Y[j] > Y[i]):
+                nd[i] = False
+                break
+    return nd
+
+# -----------------------------
+# 3) Hypervolume helpers
+# -----------------------------
+def compute_ref_point(Y_all: np.ndarray, margin: float = 0.05) -> np.ndarray:
+    # For maximization, ref point must be worse than all points
+    return np.min(Y_all, axis=0) - margin
+
+def hypervolume_of_nondominated(Y: np.ndarray, ref_point: np.ndarray) -> float:
+    if Y.size == 0:
+        return 0.0
+    nd = is_non_dominated_max(Y)
+    Y_nd = Y[nd]
+    hv = Hypervolume(ref_point=torch.tensor(ref_point, dtype=torch.double))
+    return float(hv.compute(torch.tensor(Y_nd, dtype=torch.double)))
+
+def hypervolume_vs_evals(df: pd.DataFrame, obj_cols: list[str], ref_point: np.ndarray) -> pd.DataFrame:
+    df = df.copy().reset_index(drop=True)
+    Y = df[obj_cols].to_numpy(dtype=float)
+    rows = []
+    for k in range(1, len(df) + 1):
+        Yk = Y[:k, :]
+        hv_k = hypervolume_of_nondominated(Yk, ref_point)
+        rows.append({"n_evals": k, "hv": hv_k, "n_nd": int(is_non_dominated_max(Yk).sum())})
+    return pd.DataFrame(rows)
+
+# -----------------------------
+# 4) Stable objectives via fixed reference batch trick
+# -----------------------------
+def build_reference_candidates_from_training(
+    train_csv_path: str,
+    n_ref: int = 2000,
+    seed: int = 0,
+    seq_col: str = "peptide_len10",
+) -> list[dict]:
+    df = pd.read_csv(train_csv_path).dropna(subset=[seq_col]).copy()
+    df[seq_col] = df[seq_col].astype(str).str.strip().str.upper()
+    if len(df) == 0:
+        raise ValueError(f"No valid sequences found in {train_csv_path} using column '{seq_col}'")
+    sampled = df[seq_col].sample(n=min(n_ref, len(df)), random_state=seed).tolist()
+    ref = [{"sequence": s, "binding_sites": "", "DNA_sequence": "", "metal": "MN"} for s in sampled]
+    return ref
+
+def stable_objectives_batch(
+    peptides: list[str],
+    ref_candidates: list[dict],
+    binding_sites: str = "",
+) -> np.ndarray:
+    """
+    For each peptide p: evaluate compute_objectives_mn(ref + [p]) and take candidate row.
+    Returns (N,4): [chelation_sub, solubility_sub, stability_sub, expression_sub]
+    """
+    out = []
+    for pep in peptides:
+        seq = (pep or "").strip().upper()
+        if not seq:
+            out.append([-1.0, -1.0, -1.0, -1.0])
+            continue
+
+        batch = list(ref_candidates) + [{
+            "sequence": seq,
+            "binding_sites": binding_sites,
+            "DNA_sequence": "",
+            "metal": "MN",
+        }]
+
+        df_obj = compute_objectives_mn(batch, reverse_translate_strategy="first")
+        if df_obj is None or len(df_obj) == 0:
+            out.append([-1.0, -1.0, -1.0, -1.0])
+            continue
+
+        last_seq = str(df_obj["sequence"].iloc[-1]).strip().upper()
+        if last_seq != seq:
+            out.append([-1.0, -1.0, -1.0, -1.0])
+            continue
+
+        last = df_obj.iloc[-1]
+        out.append([float(last[c]) for c in OBJ_SUB_COLS])
+
+    return np.array(out, dtype=float)
+
+# -----------------------------
+# 5) Scalar score (for comparability)
+# -----------------------------
+def scalar_score_from_objs(Y4: np.ndarray, weights: np.ndarray = SCALAR_WEIGHTS) -> np.ndarray:
+    # Y4: (N,4)
+    return (Y4 * weights.reshape(1, -1)).sum(axis=1)
+
+# -----------------------------
+# 6) Representative selection from MO Pareto set
+# -----------------------------
+def pick_pareto_representatives(df_mo: pd.DataFrame) -> dict[str, pd.Series]:
+    """
+    From MO evaluated points, compute nondominated set and choose:
+      - knee: closest to utopia (max in each dim) after min-max scaling across ND set
+      - max_chelation: ND point with max chelation
+      - max_expression: ND point with max expression
+    """
+    Y = df_mo[OBJ_COLS].to_numpy(dtype=float)
+    nd_mask = is_non_dominated_max(Y)
+    df_nd = df_mo.loc[nd_mask].copy().reset_index(drop=True)
+
+    reps: dict[str, pd.Series] = {}
+
+    if len(df_nd) == 0:
+        return reps
+
+    # max objectives in ND set serve as utopia; scale ND to [0,1]
+    Ynd = df_nd[OBJ_COLS].to_numpy(dtype=float)
+    lo = Ynd.min(axis=0)
+    hi = Ynd.max(axis=0)
+    denom = np.where((hi - lo) > 1e-12, (hi - lo), 1.0)
+    Y01 = (Ynd - lo) / denom
+    utopia = np.ones(4, dtype=float)
+
+    d = np.linalg.norm(Y01 - utopia.reshape(1, -1), axis=1)
+    knee_idx = int(np.argmin(d))
+
+    reps["knee_point"] = df_nd.iloc[knee_idx]
+    reps["max_chelation"] = df_nd.iloc[int(np.argmax(df_nd["obj_chelation"].to_numpy(dtype=float)))]
+    reps["max_expression"] = df_nd.iloc[int(np.argmax(df_nd["obj_expression"].to_numpy(dtype=float)))]
+
+    return reps
+
+# -----------------------------
+# 7) Closest-row lookup (from your provided closest CSVs)
+# -----------------------------
+def load_closest_map(path: str) -> dict[str, dict]:
+    """
+    Expects columns:
+      query_peptide, edit_distance, rank_within_query, peptide_len10, ...
+    Returns a map: query_peptide -> {closest_peptide, edit_distance, ...full_row_dict}
+    Uses rank_within_query==1 if present, else minimal edit_distance.
+    """
+    if not os.path.isfile(path):
+        return {}
+
+    df = pd.read_csv(path).copy()
+
+    # normalize
+    for col in ["query_peptide", "peptide_len10"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().str.upper()
+
+    if "query_peptide" not in df.columns:
+        return {}
+
+    if "rank_within_query" in df.columns:
+        best = df[df["rank_within_query"] == 1].copy()
+        if len(best) == 0:
+            best = df.sort_values(["query_peptide", "edit_distance"]).groupby("query_peptide").head(1)
+    else:
+        if "edit_distance" in df.columns:
+            best = df.sort_values(["query_peptide", "edit_distance"]).groupby("query_peptide").head(1)
+        else:
+            best = df.groupby("query_peptide").head(1)
+
+    mp = {}
+    for _, r in best.iterrows():
+        q = str(r["query_peptide"]).strip().upper()
+        mp[q] = r.to_dict()
+    return mp
+
+# -----------------------------
+# 8) Plot: Pareto projections (2D pairs)
+# -----------------------------
+def plot_pareto_projections(
+    df_so: pd.DataFrame,
+    df_mo: pd.DataFrame,
+    so_best_row: pd.Series,
+    mo_nd_mask: np.ndarray,
+    out_path: str,
+):
+    """
+    Creates 6 scatter plots (2x3 grid) for pairs among 4 objectives.
+    - All MO evaluated points
+    - MO nondominated highlighted
+    - SO evaluated points
+    - SO best scalar highlighted
+    """
+    pairs = [
+        ("obj_chelation", "obj_solubility"),
+        ("obj_chelation", "obj_stability"),
+        ("obj_chelation", "obj_expression"),
+        ("obj_solubility", "obj_stability"),
+        ("obj_solubility", "obj_expression"),
+        ("obj_stability", "obj_expression"),
+    ]
+
+    fig = plt.figure(figsize=(14, 8))
+
+    for i, (xcol, ycol) in enumerate(pairs, start=1):
+        ax = fig.add_subplot(2, 3, i)
+
+        # MO all
+        ax.scatter(df_mo[xcol], df_mo[ycol], s=14, label="MO evaluated", alpha=0.7)
+
+        # MO nondominated
+        df_mo_nd = df_mo.loc[mo_nd_mask]
+        ax.scatter(df_mo_nd[xcol], df_mo_nd[ycol], s=18, label="MO nondominated", alpha=0.9)
+
+        # SO all
+        ax.scatter(df_so[xcol], df_so[ycol], s=14, label="SO evaluated", alpha=0.7)
+
+        # SO best scalar
+        ax.scatter([so_best_row[xcol]], [so_best_row[ycol]], s=90, marker="*", label="SO best scalar")
+
+        ax.set_xlabel(xcol.replace("obj_", "").replace("_", " ").title())
+        ax.set_ylabel(ycol.replace("obj_", "").replace("_", " ").title())
+        ax.set_title(f"{xcol.replace('obj_','')} vs {ycol.replace('obj_','')}")
+        if i == 1:
+            ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+# -----------------------------
+# 9) Plot: Hypervolume vs iterations
+# -----------------------------
+def plot_hypervolume(hv_so: pd.DataFrame, hv_mo: pd.DataFrame, out_path: str):
+    plt.figure()
+    plt.plot(hv_so["n_evals"], hv_so["hv"], label="Single-objective BO")
+    plt.plot(hv_mo["n_evals"], hv_mo["hv"], label="MOBO qEHVI")
+    plt.xlabel("Number of evaluations")
+    plt.ylabel("Dominated hypervolume")
+    plt.title("Hypervolume vs Evaluations (shared reference point)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+# -----------------------------
+# 10) Plot: Best scalar score vs iterations
+# -----------------------------
+def plot_best_scalar_over_time(df_so: pd.DataFrame, df_mo: pd.DataFrame, out_path: str):
+    so_scores = df_so["scalar_score"].to_numpy(dtype=float)
+    mo_scores = df_mo["scalar_score"].to_numpy(dtype=float)
+
+    so_best = np.maximum.accumulate(so_scores)
+    mo_best = np.maximum.accumulate(mo_scores)
+
+    plt.figure()
+    plt.plot(np.arange(1, len(so_best) + 1), so_best, label="SO: best weighted score so far")
+    plt.plot(np.arange(1, len(mo_best) + 1), mo_best, label="MO: best weighted score so far (for comparability)")
+    plt.xlabel("Number of evaluations")
+    plt.ylabel("Best observed weighted score")
+    plt.title("Best scalar score vs Evaluations")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+# -----------------------------
+# 11) Representative peptide table
+# -----------------------------
+def make_representative_table(
+    so_best: pd.Series,
+    mo_reps: dict[str, pd.Series],
+    so_closest_map: dict[str, dict],
+    mo_closest_map: dict[str, dict],
+) -> pd.DataFrame:
+    rows = []
+
+    def add_row(tag: str, row: pd.Series, closest_map: dict[str, dict]):
+        pep = str(row["peptide"]).strip().upper()
+        closest = closest_map.get(pep, {})
+        closest_pep = str(closest.get("peptide_len10", "")).strip().upper() if "peptide_len10" in closest else ""
+        edit_dist = closest.get("edit_distance", np.nan)
+
+        rows.append({
+            "representative": tag,
+            "peptide": pep,
+            "obj_chelation": float(row["obj_chelation"]),
+            "obj_solubility": float(row["obj_solubility"]),
+            "obj_stability": float(row["obj_stability"]),
+            "obj_expression": float(row["obj_expression"]),
+            "scalar_score": float(row["scalar_score"]),
+            "closest_train_peptide": closest_pep if closest_pep else np.nan,
+            "closest_edit_distance": edit_dist,
+        })
+
+    add_row("SO_best_scalar", so_best, so_closest_map)
+
+    for k, r in mo_reps.items():
+        add_row(f"MO_{k}", r, mo_closest_map)
+
+    return pd.DataFrame(rows)
+
+# -----------------------------
+# MAIN
+# -----------------------------
+def main():
+    # ---- Load logs ----
+    so_raw = pd.read_csv(SO_LOG_PATH)
+    mo_raw = pd.read_csv(MO_LOG_PATH)
+
+    # ---- Normalize key columns ----
+    if "peptide" not in so_raw.columns:
+        raise ValueError("Single-objective CSV must contain a 'peptide' column.")
+    if "iter" not in so_raw.columns:
+        so_raw["iter"] = np.arange(len(so_raw))
+
+    need_mo = ["iter", "peptide", "obj_chelation", "obj_solubility", "obj_stability", "obj_expression"]
+    for c in need_mo:
+        if c not in mo_raw.columns:
+            raise ValueError(f"MO CSV missing required column: {c}")
+
+    so_raw["peptide"] = so_raw["peptide"].astype(str).str.strip().str.upper()
+    mo_raw["peptide"] = mo_raw["peptide"].astype(str).str.strip().str.upper()
+
+    so_df = so_raw[["iter", "peptide"]].copy().sort_values("iter").reset_index(drop=True)
+    mo_df = mo_raw[need_mo].copy().sort_values("iter").reset_index(drop=True)
+
+    # ---- Build fixed reference batch from training CSV ----
+    ref_candidates = build_reference_candidates_from_training(
+        TRAIN_CSV_PATH, n_ref=2000, seed=0, seq_col=TRAIN_SEQ_COL
+    )
+    print(f"[ref] built {len(ref_candidates)} sequences from {TRAIN_CSV_PATH}")
+
+    # ---- Compute stable objectives for SO peptides (so we can compare fairly) ----
+    so_peps = so_df["peptide"].tolist()
+    Y_so = stable_objectives_batch(so_peps, ref_candidates=ref_candidates, binding_sites="")
+    so_df[OBJ_COLS] = Y_so
+
+    # ---- Ensure MO objectives numeric ----
+    for c in OBJ_COLS:
+        mo_df[c] = mo_df[c].astype(float)
+
+    # ---- Scalar scores for both (comparability) ----
+    so_df["scalar_score"] = scalar_score_from_objs(so_df[OBJ_COLS].to_numpy(dtype=float))
+    mo_df["scalar_score"] = scalar_score_from_objs(mo_df[OBJ_COLS].to_numpy(dtype=float))
+
+    # ---- Best scalar peptide from SO ----
+    so_best_idx = int(np.argmax(so_df["scalar_score"].to_numpy(dtype=float)))
+    so_best = so_df.iloc[so_best_idx]
+
+    # ---- MO nondominated mask + representatives ----
+    Y_mo = mo_df[OBJ_COLS].to_numpy(dtype=float)
+    mo_nd_mask = is_non_dominated_max(Y_mo)
+    mo_reps = pick_pareto_representatives(mo_df)
+
+    # ---- Shared ref point for HV ----
+    Y_all = np.vstack([so_df[OBJ_COLS].to_numpy(dtype=float), mo_df[OBJ_COLS].to_numpy(dtype=float)])
+    ref_point = compute_ref_point(Y_all, margin=0.05)
+    print("[hv] shared ref_point:", ref_point)
+
+    hv_so = hypervolume_vs_evals(so_df, obj_cols=OBJ_COLS, ref_point=ref_point)
+    hv_mo = hypervolume_vs_evals(mo_df, obj_cols=OBJ_COLS, ref_point=ref_point)
+
+    # ---- Save HV csv ----
+    hv_so_out = hv_so.copy()
+    hv_so_out["method"] = "single_objective_BO"
+    hv_mo_out = hv_mo.copy()
+    hv_mo_out["method"] = "MOBO_qEHVI"
+    pd.concat([hv_so_out, hv_mo_out], ignore_index=True).to_csv(
+        os.path.join(OUT_DIR, "hypervolume_vs_iterations.csv"), index=False
+    )
+
+    # ---- Plots ----
+    plot_pareto_projections(
+        df_so=so_df,
+        df_mo=mo_df,
+        so_best_row=so_best,
+        mo_nd_mask=mo_nd_mask,
+        out_path=os.path.join(OUT_DIR, "pareto_projections_2D_pairs.png"),
+    )
+
+    plot_hypervolume(
+        hv_so=hv_so,
+        hv_mo=hv_mo,
+        out_path=os.path.join(OUT_DIR, "hypervolume_vs_iterations.png"),
+    )
+
+    plot_best_scalar_over_time(
+        df_so=so_df,
+        df_mo=mo_df,
+        out_path=os.path.join(OUT_DIR, "best_scalar_score_vs_iterations.png"),
+    )
+
+    # ---- Representative table (includes closest training row if in your closest CSVs) ----
+    so_closest_map = load_closest_map(SO_CLOSEST_PATH)
+    mo_closest_map = load_closest_map(MO_CLOSEST_PATH)
+
+    rep_table = make_representative_table(
+        so_best=so_best,
+        mo_reps=mo_reps,
+        so_closest_map=so_closest_map,
+        mo_closest_map=mo_closest_map,
+    )
+    # --- build closest map for JUST the representative peptides ---
+    rep_peps = rep_table["peptide"].astype(str).str.strip().str.upper().unique().tolist()
+
+    train_df = pd.read_csv(TRAIN_CSV_PATH).dropna(subset=[TRAIN_SEQ_COL]).copy()
+    train_df[TRAIN_SEQ_COL] = train_df[TRAIN_SEQ_COL].astype(str).str.strip().str.upper()
+
+    closest_rep = find_closest_peptide_rows(
+        df_all=train_df,
+        queries=rep_peps,
+        seq_col=TRAIN_SEQ_COL,
+        top_k=1,  # only the closest
+    )
+
+    # convert to a map: query_peptide -> closest info
+    rep_closest_map = {}
+    for _, r in closest_rep.iterrows():
+        q = str(r["query_peptide"]).strip().upper()
+        rep_closest_map[q] = r.to_dict()
+
+    # now overwrite closest fields in rep_table
+    def fill_closest(row):
+        pep = str(row["peptide"]).strip().upper()
+        hit = rep_closest_map.get(pep, {})
+        row["closest_train_peptide"] = hit.get(TRAIN_SEQ_COL, np.nan)
+        row["closest_edit_distance"] = hit.get("edit_distance", np.nan)
+        return row
+
+    rep_table = rep_table.apply(fill_closest, axis=1)
+    rep_table.to_csv(os.path.join(OUT_DIR, "representative_peptides_table.csv"), index=False)
+
+    # Also print a readable version
+    print("\n=== Representative peptides ===")
+    print(rep_table.to_string(index=False))
+
+    print("\n[saved]")
+    print(" -", os.path.join(OUT_DIR, "pareto_projections_2D_pairs.png"))
+    print(" -", os.path.join(OUT_DIR, "hypervolume_vs_iterations.png"))
+    print(" -", os.path.join(OUT_DIR, "best_scalar_score_vs_iterations.png"))
+    print(" -", os.path.join(OUT_DIR, "hypervolume_vs_iterations.csv"))
+    print(" -", os.path.join(OUT_DIR, "representative_peptides_table.csv"))
+
+if __name__ == "__main__":
+    main()
