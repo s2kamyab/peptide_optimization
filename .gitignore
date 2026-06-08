@@ -69,6 +69,8 @@ metalpdb_*.json
 metalpdb_*_raw.json
 metal_binding_augmented_random_peptides_*.csv
 metal_binding_dataset_from_*.csv
+*.csv
+*.png
 
 # Generated reports, plots, and rankings at repository root
 hypervolume_vs_iterations.csv
