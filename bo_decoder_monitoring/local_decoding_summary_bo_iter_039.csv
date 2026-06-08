@@ -1,0 +1,2 @@
+bo_iter,z_candidate_index,n_neighbors,n_unique_peptides,mean_decoder_confidence,std_decoder_confidence,mean_roundtrip_l2_to_local_z,mean_roundtrip_l2_to_center_z
+39,0,8,1,0.0757122179493308,9.664573194500965e-05,0.28164335899055004,0.0871642604470253
