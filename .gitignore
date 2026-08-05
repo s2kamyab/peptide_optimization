@@ -12,6 +12,19 @@ dist/
 *.egg-info/
 
 # Local environments
+__pycache__/
+.agents/
+.vscode/
+cache/
+colabfold310/
+data/
+output/
+peptide_opt_venv/
+py27venv/
+py27_venv_old/
+py310venv/
+tools/
+zalva_venv/
 .venv/
 venv/
 env/
