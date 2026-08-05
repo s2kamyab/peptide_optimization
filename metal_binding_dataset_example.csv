@@ -1,4 +1,0 @@
-sequence,metal,labels,split,group_id
-ACDEFGHIKLMN,CU,000100000000,train,prot_001
-MHCDEHAAAKKK,AU,011000000000,val,prot_002
-CCCGHHTTTAAA,ZN,111001000000,test,prot_003
