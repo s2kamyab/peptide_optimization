@@ -63,7 +63,7 @@ from botorch.utils.multi_objective.hypervolume import Hypervolume
 # Optional black-box evaluator. It is only required if genuinely novel decoded
 # peptides are produced and need to be scored.
 try:
-    from black_box_fcn_mo_CU_f import blackbox_fc
+    from peptide_optimization.src.scripts.black_box_fcn_mo_CU_f import blackbox_fc
 except Exception as exc:  # pragma: no cover - useful local error only
     blackbox_fc = None
     _BLACKBOX_IMPORT_ERROR = exc

@@ -47,7 +47,7 @@ def load_objective_module(module_path: str):
     path = Path(module_path)
     if not path.exists():
         # allow normal import from sys.path / current directory
-        import black_box_fcn_mo_CU_f as module  # type: ignore
+        import peptide_optimization.src.scripts.black_box_fcn_mo_CU_f as module  # type: ignore
         return module
 
     module_dir = str(path.resolve().parent)

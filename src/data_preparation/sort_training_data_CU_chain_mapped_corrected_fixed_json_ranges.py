@@ -7,9 +7,9 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
-from run_a3d import run_a3d_on_pdb
-from run_colabfold import run_colabfold_wsl
-from black_box_fcn import (
+from peptide_optimization.src.util.run_a3d import run_a3d_on_pdb
+from peptide_optimization.src.util.run_colabfold import run_colabfold_wsl
+from peptide_optimization.src.scripts.black_box_fcn import (
     _parse_binding_sites,
     _gc_fraction,
     _longest_homopolymer,
