@@ -471,6 +471,100 @@ def load_or_compute_epsilonK(args: argparse.Namespace, df: pd.DataFrame, model: 
     )
 
 
+
+def load_leakage_safe_bo_table(args):
+    eps_cols = [f"epsilonK_{i:03d}" for i in range(BO_DIM)]
+
+    coord = pd.read_csv(args.coordinate_csv).copy()
+    missing_eps = [c for c in eps_cols if c not in coord.columns]
+    if missing_eps:
+        raise KeyError(f"Coordinate CSV missing epsilonK columns: {missing_eps[:5]}")
+
+    pep_col = next((c for c in ["peptide", args.peptide_col, "peptide_len10"] if c in coord.columns), None)
+    if pep_col is None:
+        raise KeyError("Coordinate CSV has no peptide column.")
+    if "split" not in coord.columns:
+        raise KeyError("Leakage-safe coordinate CSV must contain split.")
+
+    coord["_pep"] = coord[pep_col].map(clean_peptide)
+    coord["_split"] = coord["split"].astype(str).str.strip().str.lower()
+    coord = coord.dropna(subset=["_pep"]).drop_duplicates("_pep", keep="first")
+
+    scored = pd.read_csv(args.data_csv).copy()
+    req = [args.peptide_col] + list(args.obj_cols)
+    miss = [c for c in req if c not in scored.columns]
+    if miss:
+        raise KeyError(f"Scored CSV missing columns: {miss}")
+
+    scored["_pep"] = scored[args.peptide_col].map(clean_peptide)
+    for c in args.obj_cols:
+        scored[c] = pd.to_numeric(scored[c], errors="coerce")
+    scored = scored.dropna(subset=["_pep"] + list(args.obj_cols)).copy()
+
+    if scored["_pep"].duplicated().any():
+        scored = scored.groupby("_pep", as_index=False)[list(args.obj_cols)].mean()
+
+    scored_set = set(scored["_pep"])
+    coord_set = set(coord["_pep"])
+    missing_from_coord = sorted(scored_set - coord_set)
+
+    miss_path = os.path.join(args.out_dir, "scored_peptides_excluded_by_leakage_safe_finetuning.csv")
+    pd.DataFrame({"peptide": missing_from_coord}).to_csv(miss_path, index=False)
+
+    joined = coord[["_pep", "_split"] + eps_cols].merge(
+        scored[["_pep"] + list(args.obj_cols)],
+        on="_pep",
+        how="inner",
+        validate="one_to_one",
+    )
+
+    train_name = args.train_split.lower()
+    val_name = args.validation_split.lower()
+    test_name = args.test_split.lower()
+
+    tr = joined[joined["_split"] == train_name].copy().reset_index(drop=True)
+    va = joined[joined["_split"] == val_name].copy()
+    te = joined[joined["_split"] == test_name].copy()
+
+    if tr.empty:
+        raise RuntimeError("No leakage-safe training rows remain after join.")
+
+    tr_set = set(tr["_pep"])
+    va_set = set(va["_pep"])
+    te_set = set(te["_pep"])
+    overlaps = {
+        "exact_train_validation_overlap": len(tr_set & va_set),
+        "exact_train_test_overlap": len(tr_set & te_set),
+        "exact_validation_test_overlap": len(va_set & te_set),
+    }
+    if any(overlaps.values()):
+        raise RuntimeError(f"Exact split overlap remains: {overlaps}")
+
+    tr[args.peptide_col] = tr["_pep"]
+    Z = torch.tensor(tr[eps_cols].to_numpy(dtype=np.float32), dtype=torch.float32)
+    heldout = va_set | te_set
+
+    audit = {
+        "scored_unique_peptides": len(scored_set),
+        "coordinate_unique_peptides": len(coord_set),
+        "scored_peptides_missing_from_coordinate_export": len(missing_from_coord),
+        "train_rows_used_by_bo": len(tr),
+        "validation_rows_held_out": len(va),
+        "test_rows_held_out": len(te),
+        **overlaps,
+        "historical_bo_observations": "train_only",
+        "coordinate_csv_is_authoritative_manifest": True,
+    }
+    with open(os.path.join(args.out_dir, "bo_leakage_safe_join_audit.json"), "w", encoding="utf-8") as f:
+        json.dump(audit, f, indent=2)
+
+    print(
+        f"[LEAKAGE-SAFE JOIN] excluded missing={len(missing_from_coord)}; "
+        f"train={len(tr)} validation={len(va)} test={len(te)}"
+    )
+    return tr, Z, heldout, audit
+
+
 # ============================================================
 # GP/qEHVI and black-box scoring
 # ============================================================
@@ -573,7 +667,7 @@ def decode_candidates_with_diagnostics(model: DirectSequenceDiffusion, epsK_cand
     return unique, df
 
 
-def filter_novel_peptides(candidates: Sequence[str], train_set: set, evaluated_set: set, generated_set: set, reject_training: bool, reject_seen: bool) -> Tuple[List[str], List[Tuple[str, str]]]:
+def filter_novel_peptides(candidates: Sequence[str], train_set: set, heldout_set: set, evaluated_set: set, generated_set: set, reject_training: bool, reject_seen: bool) -> Tuple[List[str], List[Tuple[str, str]]]:
     accepted: List[str] = []
     rejected: List[Tuple[str, str]] = []
     for pep in candidates:
@@ -582,6 +676,8 @@ def filter_novel_peptides(candidates: Sequence[str], train_set: set, evaluated_s
             reason = "invalid_peptide"
         elif reject_training and pep in train_set:
             reason = "in_training"
+        elif pep in heldout_set:
+            reason = "in_validation_or_test_holdout"
         elif reject_seen and pep in evaluated_set:
             reason = "already_evaluated"
         elif reject_seen and pep in generated_set:
@@ -630,9 +726,9 @@ def run_bo(args: argparse.Namespace) -> None:
     ensure_dir(args.pareto_dir)
 
     model, flow, ckpt = load_noise_flow_checkpoint(args.flow_checkpoint, device, args)
-    df = load_scored_dataframe(args.data_csv, args.peptide_col, args.obj_cols)
+    df, Z_all_cpu, heldout_set, join_audit = load_leakage_safe_bo_table(args)
     peptides = df[args.peptide_col].astype(str).tolist()
-    Z_all = load_or_compute_epsilonK(args, df, model, flow, device).to(device)
+    Z_all = Z_all_cpu.to(device)
     Z_all = project_to_sphere(Z_all, math.sqrt(BO_DIM)) if args.project_to_sphere else Z_all
     Y_train_full = torch.tensor(df[args.obj_cols].to_numpy(dtype=np.float32), dtype=torch.float32, device=device)
 
@@ -782,6 +878,7 @@ def run_bo(args: argparse.Namespace) -> None:
         cand_peps, rejected = filter_novel_peptides(
             cand_peps_raw,
             train_set=train_set,
+            heldout_set=heldout_set,
             evaluated_set=evaluated_set,
             generated_set=generated_set,
             reject_training=args.reject_training_peptides,
@@ -933,6 +1030,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--preimage-cache", default=r"cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_epsilon0_preimage_cache.pt")
     p.add_argument("--peptide-col", default="peptide_len10")
     p.add_argument("--obj-cols", nargs=4, default=OBJ_COLS)
+    p.add_argument("--train-split", default="train")
+    p.add_argument("--validation-split", default="validation")
+    p.add_argument("--test-split", default="test")
     p.add_argument("--out-dir", default="bo_results_CU_direct_diffusion_after_flow_gp")
     p.add_argument("--decoder-dir", default="bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp")
     p.add_argument("--pareto-dir", default="pareto_front_CU_direct_diffusion_after_flow_gp")

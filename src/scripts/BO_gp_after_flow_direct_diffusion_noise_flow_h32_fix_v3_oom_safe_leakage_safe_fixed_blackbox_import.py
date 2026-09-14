@@ -36,6 +36,8 @@ import math
 import os
 import random
 import gc
+import sys
+import importlib.util
 from dataclasses import asdict, dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -60,15 +62,89 @@ from botorch.sampling.normal import SobolQMCNormalSampler
 from botorch.utils.multi_objective.box_decompositions import NondominatedPartitioning
 from botorch.utils.multi_objective.hypervolume import Hypervolume
 
-# Optional black-box evaluator. It is only required if genuinely novel decoded
-# peptides are produced and need to be scored.
-try:
-    from black_box_fcn_mo_CU_f import blackbox_fc
-except Exception as exc:  # pragma: no cover - useful local error only
-    blackbox_fc = None
-    _BLACKBOX_IMPORT_ERROR = exc
-else:
-    _BLACKBOX_IMPORT_ERROR = None
+# Robust lazy black-box loading.
+blackbox_fc = None
+_BLACKBOX_IMPORT_ERROR = None
+
+def _prepare_blackbox_import(args):
+    roots = []
+    for p in getattr(args, "project_root", []) or []:
+        roots.append(os.path.abspath(os.path.expanduser(str(p))))
+
+    cwd = os.path.abspath(os.getcwd())
+    cur = cwd
+    for _ in range(6):
+        roots.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    script_dir = os.path.abspath(os.path.dirname(__file__))
+    cur = script_dir
+    for _ in range(6):
+        roots.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    for root in roots:
+        if os.path.isdir(os.path.join(root, "peptide_optimization")) and root not in sys.path:
+            sys.path.insert(0, root)
+        if os.path.basename(root).lower() == "peptide_optimization":
+            parent = os.path.dirname(root)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+
+def load_blackbox_function(args):
+    global blackbox_fc, _BLACKBOX_IMPORT_ERROR
+    if blackbox_fc is not None:
+        return blackbox_fc
+
+    _prepare_blackbox_import(args)
+
+    candidates = []
+    if getattr(args, "blackbox_script", None):
+        candidates.append(os.path.abspath(os.path.expanduser(args.blackbox_script)))
+    candidates.append(os.path.join(os.path.dirname(__file__), "black_box_fcn_mo_CU_f.py"))
+    candidates.append(os.path.join(os.getcwd(), "black_box_fcn_mo_CU_f.py"))
+
+    last_exc = None
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            name = "_zalva_blackbox_module"
+            spec = importlib.util.spec_from_file_location(name, path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not load {path}")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[name] = mod
+            spec.loader.exec_module(mod)
+            fn = getattr(mod, "blackbox_fc")
+            blackbox_fc = fn
+            print(f"[BLACKBOX] Loaded: {path}")
+            return blackbox_fc
+        except Exception as exc:
+            last_exc = exc
+            sys.modules.pop("_zalva_blackbox_module", None)
+
+    try:
+        from black_box_fcn_mo_CU_f import blackbox_fc as fn
+        blackbox_fc = fn
+        print("[BLACKBOX] Loaded by module import")
+        return blackbox_fc
+    except Exception as exc:
+        last_exc = exc
+
+    _BLACKBOX_IMPORT_ERROR = last_exc
+    raise RuntimeError(
+        "Could not import the canonical Cu black-box. "
+        "Pass --blackbox-script path/to/black_box_fcn_mo_CU_f.py and "
+        "--project-root pointing to the directory that contains the "
+        f"peptide_optimization package. Last error: {last_exc}"
+    )
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 AA_TO_I = {a: i for i, a in enumerate(AA)}
@@ -471,6 +547,100 @@ def load_or_compute_epsilonK(args: argparse.Namespace, df: pd.DataFrame, model: 
     )
 
 
+
+def load_leakage_safe_bo_table(args):
+    eps_cols = [f"epsilonK_{i:03d}" for i in range(BO_DIM)]
+
+    coord = pd.read_csv(args.coordinate_csv).copy()
+    missing_eps = [c for c in eps_cols if c not in coord.columns]
+    if missing_eps:
+        raise KeyError(f"Coordinate CSV missing epsilonK columns: {missing_eps[:5]}")
+
+    pep_col = next((c for c in ["peptide", args.peptide_col, "peptide_len10"] if c in coord.columns), None)
+    if pep_col is None:
+        raise KeyError("Coordinate CSV has no peptide column.")
+    if "split" not in coord.columns:
+        raise KeyError("Leakage-safe coordinate CSV must contain split.")
+
+    coord["_pep"] = coord[pep_col].map(clean_peptide)
+    coord["_split"] = coord["split"].astype(str).str.strip().str.lower()
+    coord = coord.dropna(subset=["_pep"]).drop_duplicates("_pep", keep="first")
+
+    scored = pd.read_csv(args.data_csv).copy()
+    req = [args.peptide_col] + list(args.obj_cols)
+    miss = [c for c in req if c not in scored.columns]
+    if miss:
+        raise KeyError(f"Scored CSV missing columns: {miss}")
+
+    scored["_pep"] = scored[args.peptide_col].map(clean_peptide)
+    for c in args.obj_cols:
+        scored[c] = pd.to_numeric(scored[c], errors="coerce")
+    scored = scored.dropna(subset=["_pep"] + list(args.obj_cols)).copy()
+
+    if scored["_pep"].duplicated().any():
+        scored = scored.groupby("_pep", as_index=False)[list(args.obj_cols)].mean()
+
+    scored_set = set(scored["_pep"])
+    coord_set = set(coord["_pep"])
+    missing_from_coord = sorted(scored_set - coord_set)
+
+    miss_path = os.path.join(args.out_dir, "scored_peptides_excluded_by_leakage_safe_finetuning.csv")
+    pd.DataFrame({"peptide": missing_from_coord}).to_csv(miss_path, index=False)
+
+    joined = coord[["_pep", "_split"] + eps_cols].merge(
+        scored[["_pep"] + list(args.obj_cols)],
+        on="_pep",
+        how="inner",
+        validate="one_to_one",
+    )
+
+    train_name = args.train_split.lower()
+    val_name = args.validation_split.lower()
+    test_name = args.test_split.lower()
+
+    tr = joined[joined["_split"] == train_name].copy().reset_index(drop=True)
+    va = joined[joined["_split"] == val_name].copy()
+    te = joined[joined["_split"] == test_name].copy()
+
+    if tr.empty:
+        raise RuntimeError("No leakage-safe training rows remain after join.")
+
+    tr_set = set(tr["_pep"])
+    va_set = set(va["_pep"])
+    te_set = set(te["_pep"])
+    overlaps = {
+        "exact_train_validation_overlap": len(tr_set & va_set),
+        "exact_train_test_overlap": len(tr_set & te_set),
+        "exact_validation_test_overlap": len(va_set & te_set),
+    }
+    if any(overlaps.values()):
+        raise RuntimeError(f"Exact split overlap remains: {overlaps}")
+
+    tr[args.peptide_col] = tr["_pep"]
+    Z = torch.tensor(tr[eps_cols].to_numpy(dtype=np.float32), dtype=torch.float32)
+    heldout = va_set | te_set
+
+    audit = {
+        "scored_unique_peptides": len(scored_set),
+        "coordinate_unique_peptides": len(coord_set),
+        "scored_peptides_missing_from_coordinate_export": len(missing_from_coord),
+        "train_rows_used_by_bo": len(tr),
+        "validation_rows_held_out": len(va),
+        "test_rows_held_out": len(te),
+        **overlaps,
+        "historical_bo_observations": "train_only",
+        "coordinate_csv_is_authoritative_manifest": True,
+    }
+    with open(os.path.join(args.out_dir, "bo_leakage_safe_join_audit.json"), "w", encoding="utf-8") as f:
+        json.dump(audit, f, indent=2)
+
+    print(
+        f"[LEAKAGE-SAFE JOIN] excluded missing={len(missing_from_coord)}; "
+        f"train={len(tr)} validation={len(va)} test={len(te)}"
+    )
+    return tr, Z, heldout, audit
+
+
 # ============================================================
 # GP/qEHVI and black-box scoring
 # ============================================================
@@ -488,16 +658,12 @@ def fit_mo_models(Z: torch.Tensor, Y: torch.Tensor, device: torch.device) -> Mod
     return ModelListGP(*models)
 
 
-def evaluate_blackbox(peptides: Sequence[str], cache: Dict[str, List[float]], obj_cols: Sequence[str]) -> torch.Tensor:
+def evaluate_blackbox(peptides: Sequence[str], cache: Dict[str, List[float]], obj_cols: Sequence[str], args: argparse.Namespace) -> torch.Tensor:
     norm_peps = [str(p).strip().upper() for p in peptides]
     uncached = [p for p in norm_peps if p not in cache]
     if uncached:
-        if blackbox_fc is None:
-            raise RuntimeError(
-                "black_box_fcn_mo_CU_f.blackbox_fc could not be imported, and novel peptides need scoring. "
-                f"Original import error: {_BLACKBOX_IMPORT_ERROR}"
-            )
-        scored = blackbox_fc(uncached)
+        scorer = load_blackbox_function(args)
+        scored = scorer(uncached)
         for _, row in scored.iterrows():
             pep = clean_peptide(row.get("peptide_len10", row.get("peptide", "")))
             if pep is None:
@@ -573,7 +739,7 @@ def decode_candidates_with_diagnostics(model: DirectSequenceDiffusion, epsK_cand
     return unique, df
 
 
-def filter_novel_peptides(candidates: Sequence[str], train_set: set, evaluated_set: set, generated_set: set, reject_training: bool, reject_seen: bool) -> Tuple[List[str], List[Tuple[str, str]]]:
+def filter_novel_peptides(candidates: Sequence[str], train_set: set, heldout_set: set, evaluated_set: set, generated_set: set, reject_training: bool, reject_seen: bool) -> Tuple[List[str], List[Tuple[str, str]]]:
     accepted: List[str] = []
     rejected: List[Tuple[str, str]] = []
     for pep in candidates:
@@ -582,6 +748,8 @@ def filter_novel_peptides(candidates: Sequence[str], train_set: set, evaluated_s
             reason = "invalid_peptide"
         elif reject_training and pep in train_set:
             reason = "in_training"
+        elif pep in heldout_set:
+            reason = "in_validation_or_test_holdout"
         elif reject_seen and pep in evaluated_set:
             reason = "already_evaluated"
         elif reject_seen and pep in generated_set:
@@ -630,9 +798,9 @@ def run_bo(args: argparse.Namespace) -> None:
     ensure_dir(args.pareto_dir)
 
     model, flow, ckpt = load_noise_flow_checkpoint(args.flow_checkpoint, device, args)
-    df = load_scored_dataframe(args.data_csv, args.peptide_col, args.obj_cols)
+    df, Z_all_cpu, heldout_set, join_audit = load_leakage_safe_bo_table(args)
     peptides = df[args.peptide_col].astype(str).tolist()
-    Z_all = load_or_compute_epsilonK(args, df, model, flow, device).to(device)
+    Z_all = Z_all_cpu.to(device)
     Z_all = project_to_sphere(Z_all, math.sqrt(BO_DIM)) if args.project_to_sphere else Z_all
     Y_train_full = torch.tensor(df[args.obj_cols].to_numpy(dtype=np.float32), dtype=torch.float32, device=device)
 
@@ -782,6 +950,7 @@ def run_bo(args: argparse.Namespace) -> None:
         cand_peps, rejected = filter_novel_peptides(
             cand_peps_raw,
             train_set=train_set,
+            heldout_set=heldout_set,
             evaluated_set=evaluated_set,
             generated_set=generated_set,
             reject_training=args.reject_training_peptides,
@@ -815,7 +984,7 @@ def run_bo(args: argparse.Namespace) -> None:
                 accepted_eps_rows.append(epsK_cand[0].detach().clone())
         Z_new = torch.stack(accepted_eps_rows, dim=0).to(device)
 
-        Y_new = evaluate_blackbox(cand_peps, obj_cache, args.obj_cols).to(device)
+        Y_new = evaluate_blackbox(cand_peps, obj_cache, args.obj_cols, args).to(device)
 
         comparison_rows = []
         for pep, y in zip(cand_peps, Y_new):
@@ -931,8 +1100,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-csv", default="metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv")
     p.add_argument("--coordinate-csv", default=r"cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_noise_flow_coordinates_for_bo.csv")
     p.add_argument("--preimage-cache", default=r"cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_epsilon0_preimage_cache.pt")
+    p.add_argument("--blackbox-script", default="black_box_fcn_mo_CU_f.py")
+    p.add_argument(
+        "--project-root",
+        action="append",
+        default=[],
+        help="Directory containing the peptide_optimization package; may be repeated.",
+    )
     p.add_argument("--peptide-col", default="peptide_len10")
     p.add_argument("--obj-cols", nargs=4, default=OBJ_COLS)
+    p.add_argument("--train-split", default="train")
+    p.add_argument("--validation-split", default="validation")
+    p.add_argument("--test-split", default="test")
     p.add_argument("--out-dir", default="bo_results_CU_direct_diffusion_after_flow_gp")
     p.add_argument("--decoder-dir", default="bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp")
     p.add_argument("--pareto-dir", default="pareto_front_CU_direct_diffusion_after_flow_gp")

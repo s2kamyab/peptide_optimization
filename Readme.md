@@ -185,7 +185,7 @@ Second Round
 Pretrain diffusion instead of GRU-VAE using the corrected data "all metal"
 
 1 - python pretrain_peptide_direct_sequence_diffusion_chain_mapped_parts_h32.py 
-  --parts-dir metalpdb_all_metals_chain_mapped_len10_high_confidence_parts\parts 
+  --parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts/parts 
   --part-glob metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv 
   --expected-parts 73 
   --peptide-col peptide_len10 
@@ -193,7 +193,7 @@ Pretrain diffusion instead of GRU-VAE using the corrected data "all metal"
   --train-split train 
   --validation-split validation 
   --test-split test 
-  --out-dir transfer_peptide_direct_sequence_diffusion_chain_mapped_h32 
+  --out-dir ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32_run_3
   --hidden-size 32 
   --n-layers 2 
   --time-dim 32 
@@ -237,6 +237,19 @@ fine tune using realnvp normalizing flow:
   --preimage-lr 5e-2 
   --export-bo-coordinates
 
+  not done yet:
+1-1- python compare_bo_candidate_spaces_direct_diffusion_realnvp_h32_v4.py 
+  --coordinate-csv ../../output/cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_conservative/cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
+  --objective-cols score 
+  --split-col split 
+  --comparison-split train 
+  --gp-train-sizes 64 128 256 512 
+  --gp-test-fraction 0.20 
+  --gp-seeds 11 22 33 
+  --bo-init-size 32 
+  --bo-budget 100 
+  --bo-seeds 101 202 303 
+  --out-dir ../../output/bo_space_comparison_direct_diffusion_h32_realnvp
 ####################################### Evaluating the peptides using blackbox function ################################
 python sort_training_data_CU_blackbox_consistent.py 
   --input-csv metalpdb_CU_chain_mapped_len10_high_confidence.csv 
@@ -251,8 +264,8 @@ python sort_training_data_CU_blackbox_consistent.py
 fine tune again using  evaluated data to affect score head training with  realnvp normalizing flow:
 
  1- python finetune_cu_direct_sequence_diffusion_noise_flow_h32_cudnn_fix_v2.py 
-  --init-checkpoint transfer_peptide_direct_sequence_diffusion_chain_mapped_h32\best_validation_direct_sequence_diffusion_search_cost_sampling_h32.pt 
-  --cu-csv metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
+  --init-checkpoint ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32_run_3\best_validation_direct_sequence_diffusion_search_cost_sampling_h32.pt 
+  --cu-csv ../../data/metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
   --peptide-col peptide_len10 
   --labels-col binding_site_labels_len10 
   --score-col final_score 
@@ -260,7 +273,7 @@ fine tune again using  evaluated data to affect score head training with  realnv
   --train-split train 
   --validation-split validation 
   --test-split test 
-  --out-dir cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored 
+  --out-dir ../../output/cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_3 
   --epochs 50 
   --batch-size 64 
   --ddim-steps 20 
@@ -281,14 +294,14 @@ fine tune again using  evaluated data to affect score head training with  realnv
 Bayesian optimization
 ###################################################################################
 1- python BO_gp_after_flow_direct_diffusion_noise_flow_h32_fix_v2.py 
-  --flow-checkpoint cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\best_val_score_mse_cu_direct_diffusion_noise_flow.pt 
+  --flow-checkpoint cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_2\best_val_score_mse_cu_direct_diffusion_noise_flow.pt 
   --data-csv metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
-  --coordinate-csv cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
-  --preimage-cache cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_epsilon0_preimage_cache.pt 
+  --coordinate-csv cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_2\cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
+  --preimage-cache cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_2\cu_direct_diffusion_epsilon0_preimage_cache.pt 
   --peptide-col peptide_len10 
-  --out-dir bo_results_CU_direct_diffusion_after_flow_gp 
-  --decoder-dir bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp 
-  --pareto-dir pareto_front_CU_direct_diffusion_after_flow_gp 
+  --out-dir bo_results_CU_direct_diffusion_after_flow_gp_run_2 
+  --decoder-dir bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp_run_2
+  --pareto-dir pareto_front_CU_direct_diffusion_after_flow_gp_run_2 
   --bo-iters 20
   --initial-labeled 256 
   --q-batch 1 
@@ -338,15 +351,15 @@ The local-noise test confirms this: even with local perturbations around each BO
   5. Keeps BO in the same epsilonK after-flow space
 
   3-1 $env:PYTORCH_ALLOC_CONF="expandable_segments:True"
-  3-2 python BO_gp_after_flow_direct_diffusion_noise_flow_h32_fix_v3_oom_safe.py 
-  --flow-checkpoint cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\best_val_score_mse_cu_direct_diffusion_noise_flow.pt 
-  --data-csv metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
-  --coordinate-csv cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
-  --preimage-cache cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored\cu_direct_diffusion_epsilon0_preimage_cache.pt 
+  3-2 python BO_gp_after_flow_direct_diffusion_noise_flow_h32_fix_v3_oom_safe_leakage_safe_fixed_blackbox_import.py 
+  --flow-checkpoint ../../output/cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_2\best_val_score_mse_cu_direct_diffusion_noise_flow.pt 
+  --data-csv ../../data/metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
+  --coordinate-csv ../../output/cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_2\cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
+  --preimage-cache ../../output/cu_direct_sequence_diffusion_noise_flow_chainmapped_h32_blackbox_scored_run_2\cu_direct_diffusion_epsilon0_preimage_cache.pt 
   --peptide-col peptide_len10 
-  --out-dir bo_results_CU_direct_diffusion_after_flow_gp_explore_v3 
-  --decoder-dir bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp_explore_v3 
-  --pareto-dir pareto_front_CU_direct_diffusion_after_flow_gp_explore_v3 
+  --out-dir ../../output/bo_results_CU_direct_diffusion_after_flow_gp_explore_v3_run_2 
+  --decoder-dir ../../output/bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp_explore_v3_run_2 
+  --pareto-dir ../../output/pareto_front_CU_direct_diffusion_after_flow_gp_explore_v3_run_2 
   --bo-iters 30 
   --initial-labeled 512 
   --q-batch 4 
@@ -360,6 +373,9 @@ The local-noise test confirms this: even with local perturbations around each BO
   --decoder-samples-per-z 32 
   --local-noise-std 0.75 
   --acqf qlogehvi
+
+
+
 
 ##########################################################################################
   Train GRU-VAE - gp after flow using new data
@@ -624,6 +640,522 @@ Fine tuning GRU-VAE + RealNVP using Cu specific data:
 7-1- python plot_bo_hypervolume_history.py 
   --history-csv ../../output/bo_results_CU_gru_vae_realnvp_zK_gp/bo_hypervolume_history.csv 
   --out-dir ../../output/bo_results_CU_gru_vae_realnvp_zK_gp/hypervolume_plots
+
+fix two issues:
+1. Data leakage risk undermines validation confidence. Even though exact sequence overlap is zero, 26.7% of PDB groups appear in both train and validation splits, and 27% of validation peptides have a training neighbor within 2 substitutions. Since PDB groups often share evolutionary/structural motifs, this means validation performance could be inflated by near-identical structural families rather than true generalization — a serious caveat for any downstream claims about generative "novelty."2026_08_13_GRU-VAE_latent_diff_NF.docx
+2. Effective dimensionality collapse is concerning and underexplored. The participation-ratio effective dimension of the 64-d GRU-VAE latent space is only 1.23, meaning the encoder is functionally using barely more than one degree of freedom despite nominal 64-d capacity. This is a red flag for representational collapse that the report notes but doesn't fully resolve — it explains why RealNVP (effective dim 26.56) and diffusion (effective dim 8.62) both outperform the raw encoder space, but it also raises the question of whether the base GRU-VAE pretraining itself needs revisiting rather than just patched downstream.2026_08_13_GRU-VAE_latent_diff_NF.docx
+8- python pretrain_gru_vae_bo_ready_h64_z64_leakage_safe_decorrelated.py 
+  --parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts/parts 
+  --file-pattern "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv" 
+  --peptide-col peptide_len10 
+  --group-col auto 
+  --out-dir ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3 
+  --hidden-size 64 
+  --latent-dim 64 
+  --n-layers 2 
+  --dropout 0.0 
+  --epochs 250 
+  --chunksize 8192 
+  --lr 3e-4 
+  --weight-decay 1e-4 
+  --kl-beta 5e-5 
+  --kl-warmup-epochs 50 
+  --decoder-input-dropout 0.20 
+  --free-decode-loss-weight 0.30 
+  --min-kl-per-dim 0.02 
+  --min-info-loss-weight 0.05 
+  --latent-spread-loss-weight 0.05 
+  --latent-cov-loss-weight 0.05 
+  --target-mu-std 1.0 
+  --mu-mean-loss-weight 0.01 
+  --validation-fraction 0.10 
+  --test-fraction 0.10 
+  --validation-split-seed 12345 
+  --holdout-min-hamming 3 
+  --geometry-max-samples 20000 
+  --selection-min-effective-dim 8 
+  --selection-effdim-penalty-weight 0.02 
+  --selection-corr-penalty-weight 0.02 
+  --no-resume 
+  --device cuda
+
+8-1- cd C:\Users\shima\OneDrive\Documentos\Leili\peptide_structure_optimization\peptide_optimization\src\plotting
+
+
+8-2- python plot_gru_vae_bo_readiness_train_validation.py 
+  --history-csv ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated/pretraining_history_bo_ready.csv 
+  --out-dir ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated/gru_vae_training_validation_plots 
+  --target-mu-std 1.0
+
+8-3- python audit_gru_vae_latent_smoothness_and_leakage_py314_fixed.py 
+  --training-script pretrain_gru_vae_bo_ready_h64_z64_leakage_safe_decorrelated.py 
+  --checkpoint ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated/best_bo_ready_gru_vae_latent_conditioned_h64_z64.pt 
+  --parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts/parts 
+  --file-pattern "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv" 
+  --peptide-col peptide_len10 
+  --validation-fraction 0.10 
+  --validation-split-seed 12345 
+  --sigmas 0.01 0.025 0.05 0.10 0.20 
+  --n-centers 128 
+  --neighbors-per-sigma 5 
+  --near-val-sample 500 
+  --near-train-sample 100000
+  --out-dir ../../output/gru_vae_h64_z64_leakage_safe_decorrelated_leakage_audit 
+  --device cuda
+change finetuning scheme to a more conservative (considering strong new gru-vae latent space)
+9- python finetune_best_bo_ready_gru_vae_cu_realnvp_objective_aware_v3.py 
+  --init-checkpoint ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/best_bo_ready_gru_vae_latent_conditioned_h64_z64.pt 
+  --pretraining-split-manifest ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/pretraining_leakage_safe_split_manifest.csv 
+  --cu-csv ../../data/metalpdb_binding_windows_len10_CU_scored_ranked.csv 
+  --peptide-col peptide_len10 
+  --objective-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --out-dir ../../output/finetuned_gru_vae_cu_realnvp_objective_aware_v3_run_3 
+  --hidden-size 64 
+  --latent-dim 64 
+  --n-layers 2 
+  --dropout 0.0 
+  --flow-layers 4 
+  --flow-hidden-dim 128 
+  --flow-max-scale 0.5 
+  --epochs 150 
+  --batch-size 64 
+  --flow-lr 3e-5 
+  --objective-head-lr 1e-4 
+  --flow-loss-weight 0.25 
+  --objective-loss-weight 5.0 
+  --locality-loss-weight 0.10 
+  --identity-loss-weight 0.01 
+  --duplicate-policy mean 
+  --unmapped-policy drop 
+  --local-noise-std 0.05 
+  --local-smoothness-subset 128 
+  --local-neighbors 3 
+  --export-checkpoint bo_ready 
+  --device cuda
+
+
+9-2- python compare_bo_candidate_spaces_gruvae_realnvp.py
+  --coordinate-csv ../../output/finetuned_gru_vae_cu_realnvp_objective_aware_v3/cu_realnvp_coordinates_for_bo.csv 
+  --training-history ../../output/finetuned_gru_vae_cu_realnvp_objective_aware_v3/training_history_cu_best_gru_vae_realnvp_leakage_safe.csv 
+  --objective-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --gp-train-sizes 64 128 256 512 1024 
+  --gp-seeds 11 22 33 
+  --bo-init-size 32 
+  --bo-budget 100 
+  --bo-seeds 101 202 303 
+  --out-dir ../../output/bo_space_comparison_realnvp_h64_z64_leakage_safe 
+  --device cuda
+
+9-3- python plot_cu_gruvae_realnvp_training_validation.py 
+  --history-csv ../../output/finetuned_gru_vae_cu_realnvp_objective_aware_v3/training_history_cu_best_gru_vae_realnvp_leakage_safe.csv  
+  --out-dir ../../output/finetuned_gru_vae_cu_realnvp_objective_aware_v3/training_validation_plots
+
+realnvp is better than mu space
+
+10- python finetune_best_bo_ready_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated.py 
+  --init-checkpoint ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/best_bo_ready_gru_vae_latent_conditioned_h64_z64.pt 
+  --pretraining-split-manifest ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/pretraining_leakage_safe_split_manifest.csv 
+  --cu-csv ../../data/metalpdb_binding_windows_len10_CU_scored_ranked.csv 
+  --peptide-col peptide_len10 
+  --objective-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --out-dir ../../output/finetuned_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated_run_3
+  --hidden-size 64 
+  --latent-dim 64 
+  --n-layers 2 
+  --dropout 0.0 
+  --diffusion-hidden-dim 128 
+  --diffusion-time-dim 32 
+  --diffusion-blocks 4 
+  --diffusion-train-steps 100 
+  --beta-start 1e-5 
+  --beta-end 8e-3 
+  --epochs 150 
+  --batch-size 64 
+  --diffusion-lr 3e-5 
+  --objective-head-lr 1e-4 
+  --diffusion-loss-weight 1.0 
+  --objective-loss-weight 0.1 
+  --locality-loss-weight 0.01 
+  --ddim-steps 50 
+  --duplicate-policy mean 
+  --unmapped-policy drop 
+  --no-project-inverted-epsilon-to-sphere 
+  --local-noise-std 0.05 
+  --local-smoothness-subset 128 
+  --local-neighbors 3 
+  --bo-selection-min-objective-pearson 0.45 
+  --bo-selection-max-objective-mse 0.008 
+  --bo-selection-min-epsilon-effective-dim 24 
+  --export-checkpoint bo_ready 
+  --device cuda
+best_Bo_rady checkpoint is not good use other
+
+10-1-python compare_bo_candidate_spaces_gruvae_diffusion_fixed_v2.py 
+  --coordinate-csv ../../output/finetuned_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated/cu_ddim_inversion_coordinates_for_bo.csv
+  --objective-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --gp-train-sizes 64 128 256 512 1024 
+  --gp-seeds 11 22 33 
+  --bo-init-size 32 
+  --bo-budget 100 
+  --bo-seeds 101 202 303 
+  --out-dir ../../output/bo_space_comparison_latent_diffusion_leakage_safe_v3
+  --device cuda
+plot fine tunig history
+10-2- python plot_cu_gruvae_latent_diffusion_training_validation.py 
+  --history-csv ../../output/finetuned_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated/training_history_cu_best_gru_vae_latent_diffusion.csv 
+  --out-dir ../../output/finetuned_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated/training_validation_plots
+
+
+11- python pretrain_peptide_direct_sequence_diffusion_bo_ready_h96.py 
+  --parts-dir ..\..\data\metalpdb_all_metals_chain_mapped_len10_high_confidence_parts\parts 
+  --part-glob "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv" 
+  --peptide-col peptide_len10 
+  --split-col split 
+  --train-split train 
+  --validation-split validation 
+  --test-split test 
+  --out-dir ..\..\output\pretrain_direct_sequence_diffusion_bo_ready_h96 
+  --hidden-size 96 
+  --n-layers 2 
+  --dropout 0.0 
+  --time-dim 32 
+  --diffusion-epochs 250 
+  --diffusion-lr 3e-4 
+  --diffusion-train-steps 100 
+  --diffusion-beta-start 1e-5 
+  --diffusion-beta-end 8e-3 
+  --ddim-steps 50 
+  --recon-ce-weight 0.5 
+  --x0-mse-weight 0.1 
+  --bo-latent-dim 64 
+  --bo-pca-fit-max-samples 50000 
+  --bo-export-max-per-split 0 
+  --no-project-inverted-epsilon-to-sphere 
+  --no-project-generated-epsilon-to-sphere 
+  --chunksize 8192 
+  --validation-batches 0 
+  --test-batches 0 
+  --weight-decay 1e-4 
+  --grad-clip 5.0 
+  --deduplicate 
+  --sanity-samples 1024 
+  --reconstruction-sanity-batches 20 
+  --device cuda
+
+here we also pretrain the original version only fix the leakage:
+11-0- python pretrain_peptide_direct_sequence_diffusion_chain_mapped_parts_h32_leakage_safe.py 
+  --parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts\parts 
+  --part-glob metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv 
+  --expected-parts 73 
+  --peptide-col peptide_len10 
+  --split-col split 
+  --train-split train 
+  --validation-split validation 
+  --test-split test 
+  --out-dir ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32 
+  --hidden-size 32 
+  --n-layers 2 
+  --time-dim 32 
+  --diffusion-epochs 250 
+  --diffusion-lr 3e-4 
+  --diffusion-train-steps 100 
+  --recon-ce-weight 0.5 
+  --x0-mse-weight 0.1 
+  --chunksize 8192 
+  --validation-batches 50 
+  --test-batches 0 
+  --no-resume
+  --leakage-audit-chunksize 100000
+
+
+11-1- python plot_direct_sequence_diffusion_bo_readiness_train_validation.py 
+  --history-csv ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32/pretraining_history_direct_sequence_diffusion.csv 
+  --out-dir ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32/training_validation_plots
+
+11-2- python audit_direct_sequence_diffusion_smoothness_and_leakage.py 
+  --training-script pretrain_peptide_direct_sequence_diffusion_bo_ready_h96.py 
+  --checkpoint ../../output/pretrain_direct_sequence_diffusion_bo_ready_h96/best_validation_direct_sequence_diffusion_bo_ready_h96.pt 
+  --parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts/parts 
+  --file-pattern "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv" 
+  --peptide-col peptide_len10 
+  --split-col split 
+  --train-split train 
+  --validation-split validation 
+  --test-split test 
+  --ddim-steps 50 
+  --bo-latent-dim 64 
+  --pca-fit-max-train 50000 
+  --max-validation-eval 10000 
+  --sigmas 0.01 0.025 0.05 0.10 0.20 
+  --n-centers 128 
+  --neighbors-per-sigma 5 
+  --out-dir ../../output/pretrain_direct_sequence_diffusion_bo_ready_h96/direct_diffusion_audit 
+  --device cuda
+for the just leakage free version:
+
+11-3- python audit_direct_sequence_diffusion_h32_spherical_epsilon_smoothness_and_leakage.py
+  --training-script pretrain_peptide_direct_sequence_diffusion_chain_mapped_parts_h32_leakage_safe.py 
+  --checkpoint ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32/best_validation_direct_sequence_diffusion_search_cost_sampling_h32.pt 
+  --parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts/parts 
+  --file-pattern "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv" 
+  --peptide-col peptide_len10 
+  --split-col split
+  --train-split train 
+  --validation-split validation 
+  --test-split test 
+  --split-audit-chunksize 100000 
+  --ddim-steps 20 
+  --batch-size 256 
+  --generation-samples 2048 
+  --n-centers 128 
+  --sigmas 0.01 0.025 0.05 0.10 0.20 
+  --neighbors-per-sigma 5 
+  --near-val-sample 500 
+  --near-test-sample 500 
+  --near-train-sample 100000 
+  --out-dir ../../output/direct_sequence_diffusion_h32_spherical_epsilon_audit_leakage_safe
+  --device cuda
+
+
+  12- python finetune_cu_direct_sequence_diffusion_pca_realnvp_leakage_safe_h96_v3.py 
+  --init-checkpoint ../../output/pretrain_direct_sequence_diffusion_bo_ready_h96/best_validation_direct_sequence_diffusion_bo_ready_h96.pt 
+  --pretraining-parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts/parts 
+  --pretraining-part-glob "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv"
+  --pretraining-peptide-col peptide_len10 
+  --pretraining-split-col split 
+  --cu-csv ../../data/metalpdb_binding_windows_len10_CU_scored_ranked.csv 
+  --peptide-col peptide_len10 
+  --score-col final_score 
+  --train-split train 
+  --validation-split validation 
+  --test-split test 
+  --duplicate-policy mean 
+  --unmapped-policy drop 
+  --ddim-steps 50 
+  --bo-latent-dim 64 
+  --no-project-inverted-epsilon-to-sphere 
+  --no-project-flow-output-to-sphere 
+  --flow-layers 4 
+  --flow-hidden-dim 128 
+  --flow-max-scale 0.5 
+  --flow-lr 3e-5 
+  --epochs 100 
+  --batch-size 64 
+  --out-dir ../../output/finetuned_cu_direct_diffusion_h96_leakage_safe 
+  --device cuda
+  for only leakage fixed:
+12-0 - python finetune_cu_direct_sequence_diffusion_noise_flow_h32_cudnn_fix_v2_leakage_safe.py 
+  --init-checkpoint ../../output/transfer_peptide_direct_sequence_diffusion_chain_mapped_h32_leakage_safe\best_validation_direct_sequence_diffusion_search_cost_sampling_h32.pt 
+  --cu-csv ../../data/metalpdb_CU_chain_mapped_len10_high_confidence.csv 
+  --pretraining-parts-dir ../../data/metalpdb_all_metals_chain_mapped_len10_high_confidence_parts\parts 
+  --pretraining-part-glob "metalpdb_ALL_chain_mapped_len10_high_confidence_part_*.csv" 
+  --pretraining-peptide-col peptide_len10 
+  --pretraining-split-col split 
+  --split-map-chunksize 100000 
+  --out-dir ../../output/finetune_direct_sequence_diffusion_noise_flow_chainmapped_h32_leakage_safe 
+  --device cuda
+
+12-1- python compare_bo_candidate_spaces_direct_diffusion_pca_realnvp_v3.py 
+  --coordinate-csv ../../output/finetuned_cu_direct_diffusion_h96_leakage_safe/cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
+  --objective-cols score 
+  --split-col split 
+  --comparison-split train 
+  --gp-train-sizes 64 128 256 512 1024 
+  --gp-test-fraction 0.20 
+  --gp-seeds 11 22 33 
+  --bo-init-size 32 
+  --bo-budget 100 
+  --bo-seeds 101 202 303 
+  --knn-k 5 
+  --pair-sample 30000 
+  --out-dir ../../output/direct_diffusion_bo_space_comparison
+
+
+  Bayesian Optimization
+  13- python BO_gp_qLogEHVI_realnvp_zK_gru_vae_h64_z64_leakage_safe_v3.py 
+  --realnvp-checkpoint ../../output/finetuned_gru_vae_cu_realnvp_objective_aware_v3_run_3/best_bo_ready_h64_z64_cu_realnvp.pt 
+  --finetune-script finetune_best_bo_ready_gru_vae_cu_realnvp_objective_aware_v3.py 
+  --data-csv ../../data/metalpdb_binding_windows_len10_CU_scored_ranked.csv 
+  --pretraining-split-manifest ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/pretraining_leakage_safe_split_manifest.csv 
+  --blackbox-script black_box_fcn_mo_CU_f.py 
+  --peptide-col peptide_len10 
+  --obj-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --duplicate-policy mean 
+  --unmapped-policy drop 
+  --bo-iters 20 
+  --initial-labeled 256 
+  --q-batch 2 
+  --optimize-q-one-at-a-time 
+  --num-restarts 4 
+  --raw-samples 64 
+  --mc-samples 32 
+  --acqf qlogehvi 
+  --zk-bound 4.0 
+  --auto-expand-zk-bound 
+  --tr-radius-zk 0.75 
+  --decoder-samples-per-zk 16 
+  --decoder-temperature 0.90 
+  --fallback-temperature 1.25 
+  --novelty-sigmas 0.05 0.10 0.20
+  --local-neighbors-per-sigma 4 
+  --max-blackbox-per-iter 8 
+  --reject-training-peptides 
+  --reject-heldout-peptides 
+  --reject-seen-peptides 
+  --out-dir ../../output/bo_gru_vae_realnvp_zK_objective_aware_v3_run_3 
+  --decoder-dir ../../output/bo_gru_vae_realnvp_zK_objective_aware_v3_run_3/decoder_monitoring 
+  --pareto-dir ../../output/bo_gru_vae_realnvp_zK_objective_aware_v3_run_3/pareto_fronts 
+  --device cuda
+
+13-1- python plot_bo_hypervolume_history.py 
+  --history-csv ../../output/bo_gru_vae_realnvp_zK_objective_aware_v3/bo_hypervolume_history.csv 
+  --out-dir ../../output/bo_gru_vae_realnvp_zK_objective_aware_v3/hypervolume_plots
+no sphere constraint:
+14- python BO_gp_qLogEHVI_diffusion_epsilon_gru_vae_h64_z64_leakage_safe_v4.py 
+  --diffusion-checkpoint ../../output/finetuned_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated_run_3/best_val_objective_mse_h64_z64_cu_latent_diffusion.pt 
+  --finetune-script finetune_best_bo_ready_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated.py 
+  --data-csv ../../data/metalpdb_binding_windows_len10_CU_scored_ranked.csv 
+  --pretraining-split-manifest ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/pretraining_leakage_safe_split_manifest.csv 
+  --blackbox-script black_box_fcn_mo_CU_f.py 
+  --peptide-col peptide_len10 
+  --obj-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --duplicate-policy mean 
+  --unmapped-policy drop 
+  --bo-iters 20 
+  --initial-labeled 256 
+  --q-batch 2 
+  --optimize-q-one-at-a-time 
+  --num-restarts 4 
+  --raw-samples 64 
+  --mc-samples 32 
+  --acqf qlogehvi 
+  --epsilon-bound 4.0 
+  --auto-expand-epsilon-bound 
+  --tr-radius-epsilon 0.75 
+  --decoder-samples-per-epsilon 16 
+  --decoder-temperature 0.90 
+  --fallback-temperature 1.25 
+  --novelty-sigmas 0.05 0.10 0.20 
+  --local-neighbors-per-sigma 4 
+  --max-blackbox-per-iter 8 
+  --reject-training-peptides 
+  --reject-heldout-peptides 
+  --reject-seen-peptides 
+  --out-dir ../../output/bo_gru_vae_diffusion_epsilon_leakage_safe_v4_run_3
+  --decoder-dir ../../output/bo_gru_vae_diffusion_epsilon_leakage_safe_v4_run_3/decoder_monitoring 
+  --pareto-dir ../../output/bo_gru_vae_diffusion_epsilon_leakage_safe_v4_run_3/pareto_fronts 
+  --device cuda
+
+14-1- python plot_bo_hypervolume_history.py 
+  --history-csv ../../output/bo_gru_vae_diffusion_epsilon_leakage_safe_v4/bo_hypervolume_history.csv 
+  --out-dir ../../output/bo_gru_vae_diffusion_epsilon_leakage_safe_v4/hypervolume_plots
+
+
+sphere radius = 8
+15- python BO_gp_qLogEHVI_diffusion_epsilon_gru_vae_h64_z64_geometry_selectable_v5_fixed.py 
+  --diffusion-checkpoint ../../output/finetuned_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated_run_3/best_val_objective_mse_h64_z64_cu_latent_diffusion.pt 
+  --finetune-script finetune_best_bo_ready_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated.py 
+  --data-csv ../../data/metalpdb_binding_windows_len10_CU_scored_ranked.csv 
+  --pretraining-split-manifest ../../output/pretrain_gru_vae_h64_z64_leakage_safe_decorrelated_run_3/pretraining_leakage_safe_split_manifest.csv 
+  --blackbox-script black_box_fcn_mo_CU_f.py 
+  --peptide-col peptide_len10 
+  --obj-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --duplicate-policy mean 
+  --unmapped-policy drop 
+  --epsilon-geometry sphere 
+  --sphere-radius 8.0 
+  --bo-iters 20 
+  --initial-labeled 256 
+  --q-batch 2 
+  --optimize-q-one-at-a-time 
+  --num-restarts 4 
+  --raw-samples 64 
+  --mc-samples 32 
+  --acqf qlogehvi 
+  --tr-radius-epsilon 0.75 
+  --decoder-samples-per-epsilon 16 
+  --decoder-temperature 0.90 
+  --fallback-temperature 1.25 
+  --novelty-sigmas 0.05 0.10 0.20 
+  --local-neighbors-per-sigma 4 
+  --max-blackbox-per-iter 8 
+  --reject-training-peptides 
+  --reject-heldout-peptides
+  --reject-seen-peptides 
+  --out-dir ../../output/bo_gru_vae_diffusion_epsilon_sphere_v5_run_3 
+  --decoder-dir ../../output/bo_gru_vae_diffusion_epsilon_sphere_v5_run_3/decoder_monitoring 
+  --pareto-dir ../../output/bo_gru_vae_diffusion_epsilon_sphere_v5_run_3/pareto_fronts 
+  --device cuda
+
+  15-1- python plot_bo_hypervolume_history.py 
+  --history-csv ../../output/bo_gru_vae_diffusion_epsilon_sphere_v5/bo_hypervolume_history.csv 
+  --out-dir ../../output/bo_gru_vae_diffusion_epsilon_sphere_v5/hypervolume_plots
+
+  16 - python BO_gp_qLogEHVI_direct_diffusion_realnvp_epsilonK_leakage_safe_v4.py 
+  --flow-checkpoint ../../output/finetuned_cu_direct_diffusion_h96_leakage_safe/best_val_score_mse_cu_direct_diffusion_noise_flow.pt 
+  --data-csv ../../data/metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
+  --coordinate-csv ../../output/finetuned_cu_direct_diffusion_h96_leakage_safe/cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
+  --blackbox-script black_box_fcn_mo_CU_f.py 
+  --peptide-col peptide_len10 
+  --obj-cols chelation_sub solubility_sub stability_sub expression_sub 
+  --bo-iters 20 
+  --initial-labeled 256 
+  --q-batch 2 
+  --optimize-q-one-at-a-time 
+  --num-restarts 4 
+  --raw-samples 64 
+  --mc-samples 32 
+  --acqf qlogehvi 
+  --epsilonK-bound 4.0 
+  --tr-radius-epsilonK 0.75 
+  --novelty-sigmas 0.05 0.10 0.20 
+  --local-neighbors-per-sigma 4 
+  --max-blackbox-per-iter 8 
+  --out-dir ../../output/bo_direct_diffusion_realnvp_epsilonK_v4 
+  --decoder-dir ../../output/bo_direct_diffusion_realnvp_epsilonK_v4/decoder_monitoring 
+  --pareto-dir ../../output/bo_direct_diffusion_realnvp_epsilonK_v4/pareto_fronts 
+  --device cuda
+
+  just fix leakage version:
+  16-0- python BO_gp_after_flow_direct_diffusion_noise_flow_h32_fix_v3_oom_safe_leakage_safe_fixed_blackbox_import.py 
+  --flow-checkpoint ../../output/finetune_direct_sequence_diffusion_noise_flow_chainmapped_h32_leakage_safe/best_val_score_mse_cu_direct_diffusion_noise_flow.pt 
+  --data-csv ../../data/metalpdb_CU_chain_mapped_len10_high_confidence_blackbox_scored_ranked.csv 
+  --coordinate-csv ../../output/finetune_direct_sequence_diffusion_noise_flow_chainmapped_h32_leakage_safe/cu_direct_diffusion_noise_flow_coordinates_for_bo.csv 
+  --preimage-cache ../../output/finetune_direct_sequence_diffusion_noise_flow_chainmapped_h32_leakage_safe/cu_direct_diffusion_epsilon0_preimage_cache.pt 
+  --blackbox-script black_box_fcn_mo_CU_f.py 
+  --project-root ../../.. 
+  --peptide-col peptide_len10 
+  --train-split train 
+  --validation-split validation 
+  --test-split test 
+  --out-dir ../../output/bo_results_CU_direct_diffusion_after_flow_gp_explore_v3_leakage_safe 
+  --decoder-dir ../../output/bo_decoder_monitoring_CU_direct_diffusion_after_flow_gp_explore_v3_leakage_safe 
+  --pareto-dir ../../output/pareto_front_CU_direct_diffusion_after_flow_gp_explore_v3_leakage_safe 
+  --bo-iters 30 
+  --initial-labeled 512 
+  --q-batch 4
+  --optimize-q-one-at-a-time 
+  --num-restarts 6 
+  --raw-samples 128 
+  --mc-samples 32 
+  --max-partition-points 15 
+  --tr-radius-unit 0.35 
+  --ddim-steps 20 
+  --decoder-samples-per-z 32 
+  --local-noise-std 0.75 
+  --acqf qlogehvi
+
+
+
+17- python audit_ddim_invertibility_gru_vae_latent_diffusion.py `
+    --finetune-script "finetune_best_bo_ready_gru_vae_cu_latent_diffusion_leakage_safe_v3_objective_gated.py" `
+    --checkpoint "cu_best_gru_vae_latent_diffusion_h64_z64_leakage_safe\best_val_objective_mse_h64_z64_cu_latent_diffusion.pt" `
+    --coordinate-csv "cu_best_gru_vae_latent_diffusion_h64_z64_leakage_safe\cu_ddim_inversion_coordinates_for_bo.csv" `
+    --out-dir "../../output/ddim_invertibility_audit" `
+    --splits val test `
+    --max-samples 512 `
+    --step-counts 5 10 20 30 50 75 100 `
+    --device cuda
 ##############################################################################################################
 the result shows that the edit distance between two near points in epsilon space is large so make additional diagnosis to find out if the objective are close or not
 
